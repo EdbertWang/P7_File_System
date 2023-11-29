@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "wfs.h"
+#include "mmap.h"
 
 static int wfs_getattr() {
     return 0; 
@@ -52,6 +53,32 @@ int main(int argc, char *argv[]) {
     //rewrite diskpath arg in argv to mount_point
     //null terminating therefore old mount_point -> null
 
-    //note quite argv
+    // Get rid of disk path before passing in argv
+    char* disk_path = argv[argc-2];
+    argv[argc-2] = argv[argc-1];
+    argv[argc-1] =  NULL;
+    argc--;
+
+    FILE* disk_fd = open(disk_path, O_RDWR);
+    if (disk_fd < 0){
+        printf("Disk Open Error\n");
+        return 1;
+    }
+
+    struct stat st;
+    stat(disk_path, &st);
+
+    void* disk_map = mmap(0,st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd, 0);
+
+
+    struct wfs_sb* superblock = disk_map;
+    if (superblock->magic != WFS_MAGIC){
+        printf("Not a wfs filesystem");
+        munmap(disk_map, st.st_size);
+        close(disk_fd);
+        return 1;
+    }
+
     return fuse_main(argc, argv, &ops, NULL);
+
 }
