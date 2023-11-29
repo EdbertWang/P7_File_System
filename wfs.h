@@ -9,7 +9,7 @@
 
 struct wfs_sb {
     uint32_t magic;
-    uint32_t head;
+    uint32_t head; //more like an offset
 };
 
 struct wfs_inode {
