@@ -3,34 +3,50 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stddef.h>
+#include <assert.h>
+
 #include "wfs.h"
 #include "mmap.h"
 
-static int wfs_getattr() {
+
+static int wfs_getattr(){
+    printf("Called getattr\n");
+    return 0;     
+}
+ 
+
+static int wfs_mknod(){
+    printf("Called mknod\n");
     return 0; 
 }
 
-static int wfs_mknod() {
+static int wfs_mkdir(){
+    printf("Caleld mkdir\n");
     return 0; 
 }
 
-static int wfs_mkdir() {
-    return 0; 
-}
-
-static int wfs_read() {
+static int wfs_read(){
+    printf("Called read\n");
     return 0;
 }
 
-static int wfs_write() {
+static int wfs_write(){
+    printf("Called write\n");
     return 0; 
 }
 
 static int wfs_readdir(){
+    printf("Called readdir\n");
     return 0;
 }
 
 static int wfs_unlink(){
+    printf("Called unlink\n");
     return 0;
 }
 
@@ -44,15 +60,11 @@ static struct fuse_operations ops = {
     .unlink    	= wfs_unlink,
 };
 
+
 //This program mounts the filesystem to a mount point, which are specifed by the arguments. 
 //The usage is mount.wfs [FUSE options] disk_path mount_point
 
-int main(int argc, char *argv[]) {
-
-    //save diskpath arg
-    //rewrite diskpath arg in argv to mount_point
-    //null terminating therefore old mount_point -> null
-
+int main(int argc, char* argv[]) {
     // Get rid of disk path before passing in argv
     char* disk_path = argv[argc-2];
     argv[argc-2] = argv[argc-1];
@@ -80,5 +92,4 @@ int main(int argc, char *argv[]) {
     }
 
     return fuse_main(argc, argv, &ops, NULL);
-
 }

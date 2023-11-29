@@ -7,7 +7,10 @@
 //i.e., mkfs.wfs disk_path initializes the existing file disk_path to an empty filesystem (Fig. a).
 
 int main(int argc, char* argv[]){
-    //Error check arguments
+    if(argc != 2){
+        printf("Should be only two args\n");
+        return 0;
+    }
     char* disk_path = argv[1];
 
     struct wfs_sb superblock;
@@ -27,11 +30,11 @@ int main(int argc, char* argv[]){
     FILE* fp = fopen(disk_path, "w");
     superblock.head = sizeof(superblock) + sizeof(root);
     superblock.magic = WFS_MAGIC;
-
     fwrite(&superblock, sizeof(superblock), 1, fp);
     fwrite(&root, sizeof(root), 1, fp);
     //write inode for superblock
 
     close(fp);
+    printf("File System Created!\n");
     return 0;
 }
