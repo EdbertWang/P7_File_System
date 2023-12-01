@@ -16,6 +16,7 @@ int main(int argc, char* argv[]){
     struct wfs_inode i = {
         .inode_number = 0,
         .deleted = 0,
+        .size = sizeof(struct wfs_log_entry),
         .mode = S_IFDIR | 0755, // Unsure bout this one TODO:
         .uid = getuid(),
         .gid = getgid(),
