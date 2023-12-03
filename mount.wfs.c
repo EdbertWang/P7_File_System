@@ -56,7 +56,7 @@ static int find_in_directory(struct wfs_log_entry* location, char* file_name){
 
 static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
     printf("getattr with path arg = %s\n", path);
-    printf("End Val: %ld\n", ((struct wfs_sb*)disk_map)->head - sizeof(struct wfs_sb));
+    //printf("End Val: %ld\n", ((struct wfs_sb*)disk_map)->head - sizeof(struct wfs_sb));
     memset(stbuf, 0, sizeof(struct stat));
 
     struct wfs_log_entry* root =  find_by_inode(0);
@@ -112,6 +112,81 @@ static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
 
 static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
     printf("mknod\n");
+
+    if (strcmp(path,"/") == 0){ // If is root
+        printf("Cannot remake root\n");
+        return -EEXIST;
+    }
+
+    struct wfs_log_entry* parent =  find_by_inode(0);
+    char* temppath = malloc(sizeof(char) * 512);
+    strcpy(temppath, path);
+
+    char* tokens[32];
+    int count = 0;
+    char *path_component = strtok(temppath, "/");
+
+    while(path_component != NULL) {
+        tokens[count] = path_component;
+        count++;
+        path_component = strtok(NULL, "/");
+    }
+
+    //TODO Changed from if(tokens) -> if(count > 0) as in anything exists there
+    if (count > 0) { // Find the parent of the directory
+        for (int i = 0; i < count - 1; i++) {
+            printf("Looking for dir %s\n", tokens[i]);
+            int nextinode = find_in_directory(parent, tokens[i]);
+            parent = find_by_inode(nextinode);
+            if (!parent){
+                printf("%s Path Not Found\n", tokens[i]);
+                free(temppath);
+                return -ENOENT;
+            }
+        }
+
+        // Making new Parent Entry
+        int new_inode = ++curr_inode;
+        char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
+        memcpy(headentry, parent, parent->inode.size);
+
+        // Build new dentry
+        struct wfs_dentry new_dir = {
+            .inode_number = new_inode,
+        };
+        strcpy(new_dir.name, *(tokens + count - 1));
+ 
+        // Insert New dentry
+        memcpy(headentry + ((struct wfs_log_entry*) headentry)->inode.size, &new_dir, sizeof(struct wfs_dentry));
+
+        // Update indicators
+        ((struct wfs_log_entry*) headentry)->inode.size += sizeof(struct wfs_dentry);
+        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size;
+        parent->inode.deleted = 1;
+
+        // Make new Log Entry
+        // Create entry for new directory
+        struct wfs_inode i = {
+            .inode_number = new_inode,
+            .deleted = 0,
+            .size = sizeof(struct wfs_log_entry),
+            .mode = S_IFREG | mode,
+            .uid = getuid(),
+            .gid = getgid(),
+            .atime = time(NULL),
+            .mtime = time(NULL),
+        };
+        struct wfs_log_entry new = {
+            .inode = i,
+        };
+        // Move to new insertion location
+        headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
+
+        memcpy(headentry, &new, new.inode.size);
+        ((struct wfs_sb*)disk_map)->head += new.inode.size;
+
+    }
+    free(temppath);
     return 0; 
 }
 
@@ -160,11 +235,11 @@ static int wfs_mkdir(const char* path, mode_t mode) {
             .inode_number = new_inode,
         };
         strcpy(new_dir.name, *(tokens + count - 1));
-
+ 
         // Insert New dentry
         memcpy(headentry + ((struct wfs_log_entry*) headentry)->inode.size, &new_dir, sizeof(struct wfs_dentry));
 
-        // Update inidicators
+        // Update indicators
         ((struct wfs_log_entry*) headentry)->inode.size += sizeof(struct wfs_dentry);
         ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size;
         parent->inode.deleted = 1;
@@ -189,8 +264,6 @@ static int wfs_mkdir(const char* path, mode_t mode) {
 
         memcpy(headentry, &new, new.inode.size);
         ((struct wfs_sb*)disk_map)->head += new.inode.size;
-
-        //free(tokens);
     }
     free(temppath);
     return 0; 
