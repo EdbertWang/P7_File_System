@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>
+#include <sys/stat.h>
 #include "wfs.h"
 
 //This C program initializes a file to an empty filesystem. The program receives a path to the disk image file as an argument, 
@@ -17,7 +19,8 @@ int main(int argc, char* argv[]){
     struct wfs_inode i = {
         .inode_number = 0,
         .deleted = 0,
-        .mode = 0755, // Unsure bout this one TODO:
+        .size = sizeof(struct wfs_log_entry),
+        .mode = S_IFDIR | 0755, // Unsure bout this one TODO:
         .uid = getuid(),
         .gid = getgid(),
         .atime = time(NULL),
@@ -34,7 +37,6 @@ int main(int argc, char* argv[]){
     fwrite(&root, sizeof(root), 1, fp);
     //write inode for superblock
 
-    close(fp);
-    printf("File System Created!\n");
+    fclose(fp);
     return 0;
 }

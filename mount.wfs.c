@@ -4,6 +4,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <time.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <string.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -11,42 +18,229 @@
 #include <assert.h>
 
 #include "wfs.h"
-#include "mmap.h"
+#include <errno.h>
 
+char* disk_map;
+int curr_inode = 0;
 
-static int wfs_getattr(){
-    printf("Called getattr\n");
-    return 0;     
+static struct wfs_log_entry* find_by_inode(int inode){
+    char* temp = (char*)disk_map + sizeof(struct wfs_sb);
+    int offset = 0;
+
+    while (offset < ((struct wfs_sb*)disk_map)->head - sizeof(struct wfs_sb)){
+        struct wfs_log_entry* curr = (struct wfs_log_entry*)(temp + offset);
+        if (curr->inode.inode_number == inode && curr->inode.deleted == 0){
+            return curr;
+        }
+        offset += curr->inode.size;
+    }
+    printf("Inode number %d Not Found\n" , inode);
+    return NULL;
 }
- 
 
-static int wfs_mknod(){
-    printf("Called mknod\n");
+static int find_in_directory(struct wfs_log_entry* location, char* file_name){
+    if (location == NULL){
+        printf("Null Pointer Passed\n");
+        return -1;
+    }
+    int data_size = location->inode.size - sizeof(struct wfs_inode);
+    for (int i = 0; i < data_size; i += sizeof(struct wfs_dentry)){
+        struct wfs_dentry* curr = (struct wfs_dentry*) (char*)(location->data + i);
+        if (strcmp(curr->name, file_name) == 0){
+            return curr->inode_number;
+        }
+    }
+    printf("File/Directory %s Not Found in inode %d\n" , file_name, location->inode.inode_number);
+    return -1;
+}
+
+static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
+    printf("getattr with path arg = %s\n", path);
+    printf("End Val: %ld\n", ((struct wfs_sb*)disk_map)->head - sizeof(struct wfs_sb));
+    memset(stbuf, 0, sizeof(struct stat));
+
+    struct wfs_log_entry* root =  find_by_inode(0);
+    if (strcmp(path,"/") == 0){ // If is root
+        stbuf->st_mode = S_IFDIR | 0755;
+        stbuf->st_nlink = 1;
+        stbuf->st_size = ((struct wfs_sb*)disk_map)->head;
+        stbuf->st_uid = root->inode.uid;
+        stbuf->st_gid = root->inode.gid;
+        return 0;
+    }
+
+    char* temppath = malloc(sizeof(char) * 512);
+    strcpy(temppath, path);
+
+    char* tokens[32];
+    int count = 0;
+
+    char *path_component = strtok(temppath, "/");
+
+    while (path_component != NULL) {
+        tokens[count] = path_component;
+        count++;
+        path_component = strtok(NULL, "/");
+    }
+
+    //TODO Changed from if(tokens) -> if(count > 0) as in anything exists theres
+    if(count > 0){
+        printf("Count = %d\n", count);
+        for (int i = 0; i < count; i++) {
+            printf("Looking for dir %s\n", tokens[i]);
+            int nextinode = find_in_directory(root, tokens[i]);
+            root = find_by_inode(nextinode);
+            if (!root){
+                printf("%s Path Not Found\n", tokens[i]);
+                free(temppath);
+                return -ENOENT;
+            }
+        }
+    }
+    free(temppath);
+
+    stbuf->st_mode = root->inode.mode;
+    stbuf->st_nlink = root->inode.links;
+    stbuf->st_size = root->inode.size;
+    stbuf->st_uid = root->inode.uid;
+    stbuf->st_gid = root->inode.gid;
+
+    
+    return 0;
+
+}
+
+static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
+    printf("mknod\n");
     return 0; 
 }
 
-static int wfs_mkdir(){
-    printf("Caleld mkdir\n");
+static int wfs_mkdir(const char* path, mode_t mode) {
+    printf("mkdir\n");
+
+    if (strcmp(path,"/") == 0){ // If is root
+        printf("Cannot remake root\n");
+        return -EEXIST;
+    }
+
+    struct wfs_log_entry* parent =  find_by_inode(0);
+    char* temppath = malloc(sizeof(char) * 512);
+    strcpy(temppath, path);
+
+    char* tokens[32];
+    int count = 0;
+    char *path_component = strtok(temppath, "/");
+
+    while(path_component != NULL) {
+        tokens[count] = path_component;
+        count++;
+        path_component = strtok(NULL, "/");
+    }
+
+    //TODO Changed from if(tokens) -> if(count > 0) as in anything exists there
+    if (count > 0) { // Find the parent of the directory
+        for (int i = 0; i < count - 1; i++) {
+            printf("Looking for dir %s\n", tokens[i]);
+            int nextinode = find_in_directory(parent, tokens[i]);
+            parent = find_by_inode(nextinode);
+            if (!parent){
+                printf("%s Path Not Found\n", tokens[i]);
+                free(temppath);
+                return -ENOENT;
+            }
+        }
+
+        // Making new Parent Entry
+        int new_inode = ++curr_inode;
+        char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
+        memcpy(headentry, parent, parent->inode.size);
+
+        // Build new dentry
+        struct wfs_dentry new_dir = {
+            .inode_number = new_inode,
+        };
+        strcpy(new_dir.name, *(tokens + count - 1));
+
+        // Insert New dentry
+        memcpy(headentry + ((struct wfs_log_entry*) headentry)->inode.size, &new_dir, sizeof(struct wfs_dentry));
+
+        // Update inidicators
+        ((struct wfs_log_entry*) headentry)->inode.size += sizeof(struct wfs_dentry);
+        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size;
+        parent->inode.deleted = 1;
+
+        // Make new Log Entry
+        // Create entry for new directory
+        struct wfs_inode i = {
+            .inode_number = new_inode,
+            .deleted = 0,
+            .size = sizeof(struct wfs_log_entry),
+            .mode = S_IFDIR | mode,
+            .uid = getuid(),
+            .gid = getgid(),
+            .atime = time(NULL),
+            .mtime = time(NULL),
+        };
+        struct wfs_log_entry new = {
+            .inode = i,
+        };
+        // Move to new insertion location
+        headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
+
+        memcpy(headentry, &new, new.inode.size);
+        ((struct wfs_sb*)disk_map)->head += new.inode.size;
+
+        //free(tokens);
+    }
+    free(temppath);
     return 0; 
 }
 
-static int wfs_read(){
-    printf("Called read\n");
+static int wfs_read(const char* path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi) { // Cat
+    printf("read\n");
     return 0;
 }
 
-static int wfs_write(){
-    printf("Called write\n");
+static int wfs_write(const char* path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi) { // Echo -> Write
+    printf("write\n");
     return 0; 
 }
 
-static int wfs_readdir(){
-    printf("Called readdir\n");
+static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi){ // cd or ls
+    printf("readdir with %s\n", path);
+    struct wfs_log_entry* curr_dir = (struct wfs_log_entry*)(disk_map + sizeof(struct wfs_sb) + offset);
+
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    st.st_ino = curr_dir->inode.inode_number;
+    st.st_mode = curr_dir->inode.mode;
+
     return 0;
+    /*
+    for (int iter = 0; iter < curr_dir->inode.size / sizeof(struct wfs_dentry); iter++){
+        printf("Dir Contains: %s\n",curr_dir->data[iter].path);
+
+        //if (filler(buf, curr_dir->data[iter].name, &st, 0, FUSE_FILL_DIR_PLUS))
+          //      break;
+    }
+    return 0;
+
+    
+    for (int iter = 0; iter < ((struct wfs_sb*)disk_map)->head; iter += curr->entry_length){
+        if (strcmp(path, ) == 0){
+
+        }
+
+        struct wfs_log_entry* curr = (struct wfs_log_entry*)(temp + iter);
+        if (curr->inode.deleted == 0 && curr->inode.mode | S_IFDIR){ // This log entry refers to a directory
+            printf("Directory Found\n");
+        }
+    }
+    */
 }
 
-static int wfs_unlink(){
-    printf("Called unlink\n");
+static int wfs_unlink(const char* path){ // rm
+    printf("unlink\n");
     return 0;
 }
 
@@ -71,19 +265,19 @@ int main(int argc, char* argv[]) {
     argv[argc-1] =  NULL;
     argc--;
 
-    FILE* disk_fd = open(disk_path, O_RDWR);
+    int disk_fd = open(disk_path, O_RDWR);
     if (disk_fd < 0){
         printf("Disk Open Error\n");
+        close(disk_fd);
         return 1;
     }
 
     struct stat st;
     stat(disk_path, &st);
 
-    void* disk_map = mmap(0,st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd, 0);
+    disk_map = (char*) mmap(0,st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd, 0);
 
-
-    struct wfs_sb* superblock = disk_map;
+    struct wfs_sb* superblock = (struct wfs_sb*)disk_map;
     if (superblock->magic != WFS_MAGIC){
         printf("Not a wfs filesystem");
         munmap(disk_map, st.st_size);
