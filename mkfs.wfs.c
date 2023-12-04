@@ -19,7 +19,7 @@ int main(int argc, char* argv[]){
     struct wfs_inode i = {
         .inode_number = 0,
         .deleted = 0,
-        .size = sizeof(struct wfs_log_entry),
+        .size = 0,
         .mode = S_IFDIR | 0755, // Unsure bout this one TODO:
         .uid = getuid(),
         .gid = getgid(),
@@ -33,9 +33,10 @@ int main(int argc, char* argv[]){
     FILE* fp = fopen(disk_path, "w");
     superblock.head = sizeof(superblock) + sizeof(root);
     superblock.magic = WFS_MAGIC;
+
+    //write contents to file
     fwrite(&superblock, sizeof(superblock), 1, fp);
     fwrite(&root, sizeof(root), 1, fp);
-    //write inode for superblock
 
     fclose(fp);
     return 0;

@@ -23,6 +23,7 @@
 char* disk_map;
 int curr_inode = 0;
 
+// Refactored
 static struct wfs_log_entry* find_by_inode(int inode){
     char* temp = (char*)disk_map + sizeof(struct wfs_sb);
     int offset = 0;
@@ -32,20 +33,20 @@ static struct wfs_log_entry* find_by_inode(int inode){
         if (curr->inode.inode_number == inode && curr->inode.deleted == 0){
             return curr;
         }
-        offset += curr->inode.size;
+        offset += curr->inode.size + sizeof(struct wfs_inode);
     }
     printf("Inode number %d Not Found\n" , inode);
     return NULL;
 }
 
+// Refactored
 static int find_in_directory(struct wfs_log_entry* location, char* file_name){
     if (location == NULL){
         printf("Null Pointer Passed\n");
         return -1;
     }
-    int data_size = location->inode.size - sizeof(struct wfs_inode);
-    for (int i = 0; i < data_size; i += sizeof(struct wfs_dentry)){
-        struct wfs_dentry* curr = (struct wfs_dentry*) (char*)(location->data + i);
+    for (int i = 0; i < location->inode.size; i += sizeof(struct wfs_dentry)){
+        struct wfs_dentry* curr = (struct wfs_dentry*) (location->data + i);
         if (strcmp(curr->name, file_name) == 0){
             return curr->inode_number;
         }
@@ -54,9 +55,9 @@ static int find_in_directory(struct wfs_log_entry* location, char* file_name){
     return -1;
 }
 
+// No Refactoring Needed
 static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
     printf("getattr with path arg = %s\n", path);
-    //printf("End Val: %ld\n", ((struct wfs_sb*)disk_map)->head - sizeof(struct wfs_sb));
     memset(stbuf, 0, sizeof(struct stat));
 
     struct wfs_log_entry* root =  find_by_inode(0);
@@ -83,7 +84,6 @@ static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
         path_component = strtok(NULL, "/");
     }
 
-    //TODO Changed from if(tokens) -> if(count > 0) as in anything exists theres
     if(count > 0){
         printf("Count = %d\n", count);
         for (int i = 0; i < count; i++) {
@@ -108,6 +108,7 @@ static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
     return 0;
 }
 
+// Refactored
 static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
     printf("mknod\n");
 
@@ -130,7 +131,6 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
         path_component = strtok(NULL, "/");
     }
 
-    //TODO Changed from if(tokens) -> if(count > 0) as in anything exists there
     if (count > 0) { // Find the parent of the directory
         for (int i = 0; i < count - 1; i++) {
             printf("Looking for dir %s\n", tokens[i]);
@@ -146,20 +146,20 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
         // Making new Parent Entry
         int new_inode = ++curr_inode;
         char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
-        memcpy(headentry, parent, parent->inode.size);
+        memcpy(headentry, parent, parent->inode.size + sizeof(struct wfs_inode));
 
         // Build new dentry
         struct wfs_dentry new_dir = {
             .inode_number = new_inode,
         };
-        strcpy(new_dir.name, *(tokens + count - 1));
+        strcpy(new_dir.name, tokens[count - 1]);
  
         // Insert New dentry
-        memcpy(headentry + ((struct wfs_log_entry*) headentry)->inode.size, &new_dir, sizeof(struct wfs_dentry));
+        memcpy(headentry + ((struct wfs_log_entry*) headentry)->inode.size + sizeof(struct wfs_inode), &new_dir, sizeof(struct wfs_dentry));
 
         // Update indicators
         ((struct wfs_log_entry*) headentry)->inode.size += sizeof(struct wfs_dentry);
-        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size;
+        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + + sizeof(struct wfs_inode);
         parent->inode.deleted = 1;
 
         // Make new Log Entry
@@ -167,7 +167,7 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
         struct wfs_inode i = {
             .inode_number = new_inode,
             .deleted = 0,
-            .size = sizeof(struct wfs_log_entry),
+            .size = 0,
             .mode = S_IFREG | mode,
             .uid = getuid(),
             .gid = getgid(),
@@ -180,13 +180,14 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
         // Move to new insertion location
         headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
 
-        memcpy(headentry, &new, new.inode.size);
-        ((struct wfs_sb*)disk_map)->head += new.inode.size;
+        memcpy(headentry, &new, + sizeof(struct wfs_inode));
+        ((struct wfs_sb*)disk_map)->head += + sizeof(struct wfs_inode);
 
     }
     free(temppath);
     return 0; 
 }
+
 
 static int wfs_mkdir(const char* path, mode_t mode) {
     printf("mkdir\n");
@@ -226,7 +227,7 @@ static int wfs_mkdir(const char* path, mode_t mode) {
         // Making new Parent Entry
         int new_inode = ++curr_inode;
         char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
-        memcpy(headentry, parent, parent->inode.size);
+        memcpy(headentry, parent, parent->inode.size + + sizeof(struct wfs_inode));
 
         // Build new dentry
         struct wfs_dentry new_dir = {
@@ -235,11 +236,11 @@ static int wfs_mkdir(const char* path, mode_t mode) {
         strcpy(new_dir.name, *(tokens + count - 1));
  
         // Insert New dentry
-        memcpy(headentry + ((struct wfs_log_entry*) headentry)->inode.size, &new_dir, sizeof(struct wfs_dentry));
+        memcpy(headentry + ((struct wfs_log_entry*) headentry)->inode.size + sizeof(struct wfs_inode), &new_dir, sizeof(struct wfs_dentry));
 
         // Update indicators
         ((struct wfs_log_entry*) headentry)->inode.size += sizeof(struct wfs_dentry);
-        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size;
+        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + sizeof(struct wfs_inode);
         parent->inode.deleted = 1;
 
         // Make new Log Entry
@@ -247,7 +248,7 @@ static int wfs_mkdir(const char* path, mode_t mode) {
         struct wfs_inode i = {
             .inode_number = new_inode,
             .deleted = 0,
-            .size = sizeof(struct wfs_log_entry),
+            .size = 0,
             .mode = S_IFDIR | mode,
             .uid = getuid(),
             .gid = getgid(),
@@ -260,14 +261,15 @@ static int wfs_mkdir(const char* path, mode_t mode) {
         // Move to new insertion location
         headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
 
-        memcpy(headentry, &new, new.inode.size);
-        ((struct wfs_sb*)disk_map)->head += new.inode.size;
+        memcpy(headentry, &new, sizeof(struct wfs_inode));
+        ((struct wfs_sb*)disk_map)->head += sizeof(struct wfs_inode);
     }
     free(temppath);
     return 0; 
 }
 
 
+// Refactored
 // TODO: Might have errors with buffer
 static int wfs_read(const char* path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi) { // Cat
     if (strcmp(path,"/") == 0){
@@ -303,7 +305,7 @@ static int wfs_read(const char* path, char *buf, size_t size, off_t offset, stru
     char* data = currLog->data;
     data += offset;
 
-    if(data > ((char* )currLog + currLog->inode.size)){
+    if(data > ((char* )currLog + currLog->inode.size + + sizeof(struct wfs_inode))){
         return 0;
     }
 
@@ -313,6 +315,7 @@ static int wfs_read(const char* path, char *buf, size_t size, off_t offset, stru
     return size;
 }
 
+// Refactored
 // TODO: Might have errors with buffer
 static int wfs_write(const char* path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi) { // Echo -> Write
     printf("writing %s to %s\n", buf, path);
@@ -350,19 +353,19 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
         // Making new Entry
         char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
         if (!newfile){ // Old file to reference first
-            memcpy(headentry, file, file->inode.size);
+            memcpy(headentry, file, file->inode.size + + sizeof(struct wfs_inode));
             // Insert New Data
             memcpy(headentry + sizeof(struct wfs_inode) + offset, buf, size);
             // Update indicators
             ((struct wfs_log_entry*) headentry)->inode.size += size - offset;
-            ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size;
+            ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + + sizeof(struct wfs_inode);
             file->inode.deleted = 1;
         } else{
             // Make new Log Entry
             struct wfs_inode i = {
                 .inode_number = ++curr_inode,
                 .deleted = 0,
-                .size = sizeof(struct wfs_log_entry) + offset + size,
+                .size = offset + size,
                 .mode = S_IFREG | 444,
                 .uid = getuid(),
                 .gid = getgid(),
@@ -373,9 +376,9 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
                 .inode = i,
             };
 
-            memcpy(headentry, &new, new.inode.size);
+            memcpy(headentry, &new, new.inode.size + sizeof(struct wfs_inode));
             memcpy(headentry + sizeof(struct wfs_inode) + offset, buf, size);
-            ((struct wfs_sb*)disk_map)->head += new.inode.size;
+            ((struct wfs_sb*)disk_map)->head += new.inode.size + + sizeof(struct wfs_inode);
         }
     }
     free(temppath);
@@ -383,6 +386,7 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
     return size; 
 }
 
+// Refactored
 static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi){ // cd or ls
     printf("readdir with %s\n", path);
 
@@ -415,8 +419,8 @@ static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_
         free(temppath);
         return 0;
     }
-    for (int bufiter = sizeof(struct wfs_inode); bufiter < dir->inode.size; bufiter += sizeof(struct wfs_dentry)){
-        struct wfs_dentry* curr_item = (struct wfs_dentry*)((char*) dir + bufiter);
+    for (int bufiter = 0; bufiter < dir->inode.size; bufiter += sizeof(struct wfs_dentry)){
+        struct wfs_dentry* curr_item = (struct wfs_dentry*)((char*) dir->data + bufiter);
         printf("%s\n", curr_item->name);
         filler(buf, curr_item->name, NULL, offset);
     }
@@ -477,25 +481,22 @@ static int wfs_unlink(const char* path){ // rm
         memcpy(updatedParent, parent, sizeof(struct wfs_inode));
         updatedParent->inode.size -= sizeof(struct wfs_dentry);
 
-        //Old Parent Datasize
-        int data_size = parent->inode.size - sizeof(struct wfs_inode); 
         //Run through parent data entries
         int entries = 0;
-        for (int i = 0; i < data_size; i += sizeof(struct wfs_dentry)){
+        for (int i = 0; i < parent->inode.size; i += sizeof(struct wfs_dentry)){
             struct wfs_dentry* curr = (struct wfs_dentry*) ((char*)parent->data + i);
-            if (strcmp(curr->name, tokens[count-1]) == 0){}//If the actual file to delete, don't copy
-            else{
+            if (strcmp(curr->name, tokens[count-1]) != 0){//If the actual file to delete, don't copy
                 memcpy((struct wfs_dentry*)updatedParent->data + entries, curr, sizeof(struct wfs_dentry));
                 entries++;
             }
             
         }
 
-         //actually put updatedParent @ the head
-        memcpy(headentry, updatedParent, updatedParent->inode.size);
+        //actually put updatedParent @ the head
+        memcpy(headentry, updatedParent, updatedParent->inode.size + sizeof(struct wfs_inode));
 
         //Update headentry & superblock's head
-        ((struct wfs_sb*)disk_map)->head += updatedParent->inode.size;
+        ((struct wfs_sb*)disk_map)->head += updatedParent->inode.size + sizeof(struct wfs_inode);
     }
     free(temppath);
     return 0; 
