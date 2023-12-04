@@ -15,7 +15,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
-#include <assert.h>
+#include <dirent.h>
 
 #include "wfs.h"
 #include <errno.h>
@@ -105,9 +105,7 @@ static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
     stbuf->st_uid = root->inode.uid;
     stbuf->st_gid = root->inode.gid;
 
-    
     return 0;
-
 }
 
 static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
@@ -269,52 +267,238 @@ static int wfs_mkdir(const char* path, mode_t mode) {
     return 0; 
 }
 
+
+// TODO: Might have errors with buffer
 static int wfs_read(const char* path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi) { // Cat
-    printf("read\n");
-    return 0;
+    if (strcmp(path,"/") == 0){
+        printf("Cannot read root\n");
+        return -EEXIST;
+    }
+
+    struct wfs_log_entry* currLog =  find_by_inode(0); //First is always root
+    char* temppath = malloc(sizeof(char) * 512);
+    strcpy(temppath, path);
+
+    char* tokens[32];
+    int count = 0;
+    char *path_component = strtok(temppath, "/");
+
+    while(path_component != NULL) {
+        tokens[count] = path_component;
+        count++;
+        path_component = strtok(NULL, "/");
+    }
+
+    for (int i = 0; i < count; i++) {
+        //printf("Looking for dir %s\n", tokens[i]);
+        int nextinode = find_in_directory(currLog, tokens[i]);
+        currLog = find_by_inode(nextinode);
+        if (!currLog){
+            //printf("%s Path Not Found\n", tokens[i]);
+            free(temppath);
+            return -ENOENT;
+        }
+    }
+    //currLog should be @ right log now.
+    char* data = currLog->data;
+    data += offset;
+
+    if(data > ((char* )currLog + currLog->inode.size)){
+        return 0;
+    }
+
+    memcpy(buf, data, size);
+
+    //Returns the number of bytes transferred, or 0 if offset was at or beyond the end of the file. 
+    return size;
 }
 
+// TODO: Might have errors with buffer
 static int wfs_write(const char* path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi) { // Echo -> Write
-    printf("write\n");
-    return 0; 
+    printf("writing %s to %s\n", buf, path);
+
+    struct wfs_log_entry* file =  find_by_inode(0);
+    char* temppath = malloc(sizeof(char) * 512);
+    strcpy(temppath, path);
+
+    char* tokens[32];
+    int count = 0;
+    char *path_component = strtok(temppath, "/");
+
+    while(path_component != NULL) {
+        tokens[count] = path_component;
+        count++;
+        path_component = strtok(NULL, "/");
+    }
+    char newfile = 0;
+    if (count > 0) { // Find the file
+        for (int i = 0; i < count; i++) {
+            printf("Looking for dir %s\n", tokens[i]);
+            int nextinode = find_in_directory(file, tokens[i]);
+            file = find_by_inode(nextinode);
+            if (!file){
+                if (i != count - 1){
+                    printf("%s Path Not Found\n", tokens[i]);
+                    free(temppath);
+                    return -ENOENT;
+                } else {
+                    newfile=1;
+                }
+            }
+        }
+
+        // Making new Entry
+        char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
+        if (!newfile){ // Old file to reference first
+            memcpy(headentry, file, file->inode.size);
+            // Insert New Data
+            memcpy(headentry + sizeof(struct wfs_inode) + offset, buf, size);
+            // Update indicators
+            ((struct wfs_log_entry*) headentry)->inode.size += size - offset;
+            ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size;
+            file->inode.deleted = 1;
+        } else{
+            // Make new Log Entry
+            struct wfs_inode i = {
+                .inode_number = ++curr_inode,
+                .deleted = 0,
+                .size = sizeof(struct wfs_log_entry) + offset + size,
+                .mode = S_IFREG | 444,
+                .uid = getuid(),
+                .gid = getgid(),
+                .atime = time(NULL),
+                .mtime = time(NULL),
+            };
+            struct wfs_log_entry new = {
+                .inode = i,
+            };
+
+            memcpy(headentry, &new, new.inode.size);
+            memcpy(headentry + sizeof(struct wfs_inode) + offset, buf, size);
+            ((struct wfs_sb*)disk_map)->head += new.inode.size;
+        }
+    }
+    free(temppath);
+
+    return size; 
 }
 
 static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi){ // cd or ls
     printf("readdir with %s\n", path);
-    struct wfs_log_entry* curr_dir = (struct wfs_log_entry*)(disk_map + sizeof(struct wfs_sb) + offset);
 
-    struct stat st;
-    memset(&st, 0, sizeof(st));
-    st.st_ino = curr_dir->inode.inode_number;
-    st.st_mode = curr_dir->inode.mode;
+    char* temppath = malloc(sizeof(char) * 512);
+    strcpy(temppath, path);
 
-    return 0;
-    /*
-    for (int iter = 0; iter < curr_dir->inode.size / sizeof(struct wfs_dentry); iter++){
-        printf("Dir Contains: %s\n",curr_dir->data[iter].path);
+    char* tokens[32];
+    int count = 0;
+    char *path_component = strtok(temppath, "/");
 
-        //if (filler(buf, curr_dir->data[iter].name, &st, 0, FUSE_FILL_DIR_PLUS))
-          //      break;
+    while(path_component != NULL) {
+        tokens[count] = path_component;
+        count++;
+        path_component = strtok(NULL, "/");
     }
-    return 0;
 
+    struct wfs_log_entry* dir =  find_by_inode(0);
+    for (int i = 0; i < count; i++) {
+        printf("Looking for dir %s\n", tokens[i]);
+        int nextinode = find_in_directory(dir, tokens[i]);
+        dir = find_by_inode(nextinode);
+        if (!dir){
+            printf("%s Path Not Found\n", tokens[i]);
+            free(temppath);
+            return -ENOENT;
+        }
+    }
+    if ((dir->inode.mode & S_IFREG) == S_IFREG){
+        printf("Not a directory\n");
+        free(temppath);
+        return 0;
+    }
+    for (int bufiter = sizeof(struct wfs_inode); bufiter < dir->inode.size; bufiter += sizeof(struct wfs_dentry)){
+        struct wfs_dentry* curr_item = (struct wfs_dentry*)((char*) dir + bufiter);
+        printf("%s\n", curr_item->name);
+        filler(buf, curr_item->name, NULL, offset);
+    }
     
-    for (int iter = 0; iter < ((struct wfs_sb*)disk_map)->head; iter += curr->entry_length){
-        if (strcmp(path, ) == 0){
-
-        }
-
-        struct wfs_log_entry* curr = (struct wfs_log_entry*)(temp + iter);
-        if (curr->inode.deleted == 0 && curr->inode.mode | S_IFDIR){ // This log entry refers to a directory
-            printf("Directory Found\n");
-        }
-    }
-    */
+    free(temppath);
+    return 0;
 }
 
 static int wfs_unlink(const char* path){ // rm
-    printf("unlink\n");
-    return 0;
+    if(strcmp(path,"/") == 0){ // If is root
+        printf("Cannot remake root\n");
+        return -EEXIST;
+    }
+
+    char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
+
+    struct wfs_log_entry* parent =  find_by_inode(0); //Always start @ root
+    char* temppath = malloc(sizeof(char) * 512);
+    strcpy(temppath, path);
+
+    char* tokens[32];
+    int count = 0;
+    char *path_component = strtok(temppath, "/");
+
+    while(path_component != NULL) {
+        tokens[count] = path_component;
+        count++;
+        path_component = strtok(NULL, "/");
+    }
+
+    if (count > 0) { // Find the parent of the file to remove
+        for (int i = 0; i < count - 1; i++) {
+            printf("Looking for dir %s\n", tokens[i]);
+            int nextinode = find_in_directory(parent, tokens[i]);
+            parent = find_by_inode(nextinode);
+            if (!parent){
+                // printf("%s Path Not Found\n", tokens[i]);
+                free(temppath);
+                return -ENOENT;
+            }
+        }
+
+        //set the file to be removed
+        int removedInode = find_in_directory(parent, tokens[count-1]);
+        if(!removedInode){
+            printf("Couldn't find file to remove\n");
+            free(temppath);
+            return -ENOENT;
+        }
+
+        //TODO CHECK IF ITS A FILE VS DIR
+        struct wfs_log_entry* removed = find_by_inode(removedInode);
+        removed->inode.deleted = 1;
+        
+        //Update the new parent inode & specifically log entry size.
+        struct wfs_log_entry* updatedParent = (struct wfs_log_entry*)headentry;
+
+        memcpy(updatedParent, parent, sizeof(struct wfs_inode));
+        updatedParent->inode.size -= sizeof(struct wfs_dentry);
+
+        //Old Parent Datasize
+        int data_size = parent->inode.size - sizeof(struct wfs_inode); 
+        //Run through parent data entries
+        int entries = 0;
+        for (int i = 0; i < data_size; i += sizeof(struct wfs_dentry)){
+            struct wfs_dentry* curr = (struct wfs_dentry*) ((char*)parent->data + i);
+            if (strcmp(curr->name, tokens[count-1]) == 0){}//If the actual file to delete, don't copy
+            else{
+                memcpy((struct wfs_dentry*)updatedParent->data + entries, curr, sizeof(struct wfs_dentry));
+                entries++;
+            }
+            
+        }
+
+         //actually put updatedParent @ the head
+        memcpy(headentry, updatedParent, updatedParent->inode.size);
+
+        //Update headentry & superblock's head
+        ((struct wfs_sb*)disk_map)->head += updatedParent->inode.size;
+    }
+    free(temppath);
+    return 0; 
 }
 
 static struct fuse_operations ops = {
