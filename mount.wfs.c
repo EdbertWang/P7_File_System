@@ -27,16 +27,21 @@ int curr_inode = 0;
 static struct wfs_log_entry* find_by_inode(int inode){
     char* temp = (char*)disk_map + sizeof(struct wfs_sb);
     int offset = 0;
+    struct wfs_log_entry* recent = NULL;
 
     while (offset < ((struct wfs_sb*)disk_map)->head - sizeof(struct wfs_sb)){
         struct wfs_log_entry* curr = (struct wfs_log_entry*)(temp + offset);
-        if (curr->inode.inode_number == inode && curr->inode.deleted == 0){
-            return curr;
+        if (curr->inode.inode_number == inode){
+            if (curr->inode.deleted == 0){
+                recent = curr;
+            } else {
+                recent = NULL;
+            }
         }
         offset += curr->inode.size + sizeof(struct wfs_inode);
     }
-    printf("Inode number %d Not Found\n" , inode);
-    return NULL;
+    //printf("Inode number %d Not Found\n" , inode);
+    return recent;
 }
 
 // Refactored
@@ -70,10 +75,10 @@ static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
         return 0;
     }
 
-    char* temppath = malloc(sizeof(char) * 512);
+    char* temppath = malloc(sizeof(char) * PATH_LEN);
     strcpy(temppath, path);
 
-    char* tokens[32];
+    char* tokens[PATH_LEN];
     int count = 0;
 
     char *path_component = strtok(temppath, "/");
@@ -118,10 +123,10 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
     }
 
     struct wfs_log_entry* parent =  find_by_inode(0);
-    char* temppath = malloc(sizeof(char) * 512);
+    char* temppath = malloc(sizeof(char) * PATH_LEN);
     strcpy(temppath, path);
 
-    char* tokens[32];
+    char* tokens[PATH_LEN];
     int count = 0;
     char *path_component = strtok(temppath, "/");
 
@@ -159,8 +164,8 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
 
         // Update indicators
         ((struct wfs_log_entry*) headentry)->inode.size += sizeof(struct wfs_dentry);
-        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + + sizeof(struct wfs_inode);
-        parent->inode.deleted = 1;
+        ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + sizeof(struct wfs_inode);
+        //parent->inode.deleted = 1;
 
         // Make new Log Entry
         // Create entry for new directory
@@ -183,6 +188,11 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
         memcpy(headentry, &new, + sizeof(struct wfs_inode));
         ((struct wfs_sb*)disk_map)->head += + sizeof(struct wfs_inode);
 
+        if (((struct wfs_sb*)disk_map)->head > CAP){
+            free(temppath);
+            return -ENOSPC;
+        }
+
     }
     free(temppath);
     return 0; 
@@ -198,10 +208,10 @@ static int wfs_mkdir(const char* path, mode_t mode) {
     }
 
     struct wfs_log_entry* parent =  find_by_inode(0);
-    char* temppath = malloc(sizeof(char) * 512);
+    char* temppath = malloc(sizeof(char) * PATH_LEN);
     strcpy(temppath, path);
 
-    char* tokens[32];
+    char* tokens[PATH_LEN];
     int count = 0;
     char *path_component = strtok(temppath, "/");
 
@@ -227,7 +237,7 @@ static int wfs_mkdir(const char* path, mode_t mode) {
         // Making new Parent Entry
         int new_inode = ++curr_inode;
         char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
-        memcpy(headentry, parent, parent->inode.size + + sizeof(struct wfs_inode));
+        memcpy(headentry, parent, parent->inode.size + sizeof(struct wfs_inode));
 
         // Build new dentry
         struct wfs_dentry new_dir = {
@@ -241,7 +251,7 @@ static int wfs_mkdir(const char* path, mode_t mode) {
         // Update indicators
         ((struct wfs_log_entry*) headentry)->inode.size += sizeof(struct wfs_dentry);
         ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + sizeof(struct wfs_inode);
-        parent->inode.deleted = 1;
+        //parent->inode.deleted = 1;
 
         // Make new Log Entry
         // Create entry for new directory
@@ -263,6 +273,12 @@ static int wfs_mkdir(const char* path, mode_t mode) {
 
         memcpy(headentry, &new, sizeof(struct wfs_inode));
         ((struct wfs_sb*)disk_map)->head += sizeof(struct wfs_inode);
+
+        if (((struct wfs_sb*)disk_map)->head > CAP){
+            free(temppath);
+            return -ENOSPC;
+        }
+
     }
     free(temppath);
     return 0; 
@@ -278,10 +294,10 @@ static int wfs_read(const char* path, char *buf, size_t size, off_t offset, stru
     }
 
     struct wfs_log_entry* currLog =  find_by_inode(0); //First is always root
-    char* temppath = malloc(sizeof(char) * 512);
+    char* temppath = malloc(sizeof(char) * PATH_LEN);
     strcpy(temppath, path);
 
-    char* tokens[32];
+    char* tokens[PATH_LEN];
     int count = 0;
     char *path_component = strtok(temppath, "/");
 
@@ -305,7 +321,7 @@ static int wfs_read(const char* path, char *buf, size_t size, off_t offset, stru
     char* data = currLog->data;
     data += offset;
 
-    if(data > ((char* )currLog + currLog->inode.size + + sizeof(struct wfs_inode))){
+    if(data > ((char* )currLog + currLog->inode.size + sizeof(struct wfs_inode))){
         return 0;
     }
 
@@ -321,10 +337,10 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
     printf("writing %s to %s\n", buf, path);
 
     struct wfs_log_entry* file =  find_by_inode(0);
-    char* temppath = malloc(sizeof(char) * 512);
+    char* temppath = malloc(sizeof(char) * PATH_LEN);
     strcpy(temppath, path);
 
-    char* tokens[32];
+    char* tokens[PATH_LEN];
     int count = 0;
     char *path_component = strtok(temppath, "/");
 
@@ -353,13 +369,13 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
         // Making new Entry
         char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
         if (!newfile){ // Old file to reference first
-            memcpy(headentry, file, file->inode.size + + sizeof(struct wfs_inode));
+            memcpy(headentry, file, file->inode.size + sizeof(struct wfs_inode));
             // Insert New Data
             memcpy(headentry + sizeof(struct wfs_inode) + offset, buf, size);
             // Update indicators
             ((struct wfs_log_entry*) headentry)->inode.size += size - offset;
-            ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + + sizeof(struct wfs_inode);
-            file->inode.deleted = 1;
+            ((struct wfs_sb*)disk_map)->head += ((struct wfs_log_entry*) headentry)->inode.size + sizeof(struct wfs_inode);
+            //file->inode.deleted = 1;
         } else{
             // Make new Log Entry
             struct wfs_inode i = {
@@ -378,7 +394,11 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
 
             memcpy(headentry, &new, new.inode.size + sizeof(struct wfs_inode));
             memcpy(headentry + sizeof(struct wfs_inode) + offset, buf, size);
-            ((struct wfs_sb*)disk_map)->head += new.inode.size + + sizeof(struct wfs_inode);
+            ((struct wfs_sb*)disk_map)->head += new.inode.size + sizeof(struct wfs_inode);
+        }
+        if (((struct wfs_sb*)disk_map)->head > CAP){
+            free(temppath);
+            return -ENOSPC;
         }
     }
     free(temppath);
@@ -390,10 +410,10 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
 static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi){ // cd or ls
     printf("readdir with %s\n", path);
 
-    char* temppath = malloc(sizeof(char) * 512);
+    char* temppath = malloc(sizeof(char) * PATH_LEN);
     strcpy(temppath, path);
 
-    char* tokens[32];
+    char* tokens[PATH_LEN];
     int count = 0;
     char *path_component = strtok(temppath, "/");
 
@@ -438,10 +458,10 @@ static int wfs_unlink(const char* path){ // rm
     char* headentry = disk_map + ((struct wfs_sb*)disk_map)->head;
 
     struct wfs_log_entry* parent =  find_by_inode(0); //Always start @ root
-    char* temppath = malloc(sizeof(char) * 512);
+    char* temppath = malloc(sizeof(char) * PATH_LEN);
     strcpy(temppath, path);
 
-    char* tokens[32];
+    char* tokens[PATH_LEN];
     int count = 0;
     char *path_component = strtok(temppath, "/");
 
@@ -497,6 +517,11 @@ static int wfs_unlink(const char* path){ // rm
 
         //Update headentry & superblock's head
         ((struct wfs_sb*)disk_map)->head += updatedParent->inode.size + sizeof(struct wfs_inode);
+
+        if (((struct wfs_sb*)disk_map)->head > CAP){
+            free(temppath);
+            return -ENOSPC;
+        }
     }
     free(temppath);
     return 0; 
