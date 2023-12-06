@@ -90,13 +90,13 @@ static int wfs_getattr(const char *path, struct stat *stbuf) { // Stat
     }
 
     if(count > 0){
-        printf("Count = %d\n", count);
+        //printf("Count = %d\n", count);
         for (int i = 0; i < count; i++) {
-            printf("Looking for dir %s\n", tokens[i]);
+            //printf("Looking for dir %s\n", tokens[i]);
             int nextinode = find_in_directory(root, tokens[i]);
             root = find_by_inode(nextinode);
             if (!root){
-                printf("%s Path Not Found\n", tokens[i]);
+                //printf("%s Path Not Found\n", tokens[i]);
                 free(temppath);
                 return -ENOENT;
             }
@@ -138,11 +138,11 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev) { // Echo
 
     if (count > 0) { // Find the parent of the directory
         for (int i = 0; i < count - 1; i++) {
-            printf("Looking for dir %s\n", tokens[i]);
+            //printf("Looking for dir %s\n", tokens[i]);
             int nextinode = find_in_directory(parent, tokens[i]);
             parent = find_by_inode(nextinode);
             if (!parent){
-                printf("%s Path Not Found\n", tokens[i]);
+                //printf("%s Path Not Found\n", tokens[i]);
                 free(temppath);
                 return -ENOENT;
             }
@@ -224,11 +224,11 @@ static int wfs_mkdir(const char* path, mode_t mode) {
     //TODO Changed from if(tokens) -> if(count > 0) as in anything exists there
     if (count > 0) { // Find the parent of the directory
         for (int i = 0; i < count - 1; i++) {
-            printf("Looking for dir %s\n", tokens[i]);
+            //printf("Looking for dir %s\n", tokens[i]);
             int nextinode = find_in_directory(parent, tokens[i]);
             parent = find_by_inode(nextinode);
             if (!parent){
-                printf("%s Path Not Found\n", tokens[i]);
+                //printf("%s Path Not Found\n", tokens[i]);
                 free(temppath);
                 return -ENOENT;
             }
@@ -352,7 +352,7 @@ static int wfs_write(const char* path, const char *buf, size_t size, off_t offse
     char newfile = 0;
     if (count > 0) { // Find the file
         for (int i = 0; i < count; i++) {
-            printf("Looking for dir %s\n", tokens[i]);
+            //printf("Looking for dir %s\n", tokens[i]);
             int nextinode = find_in_directory(file, tokens[i]);
             file = find_by_inode(nextinode);
             if (!file){
@@ -425,7 +425,7 @@ static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_
 
     struct wfs_log_entry* dir =  find_by_inode(0);
     for (int i = 0; i < count; i++) {
-        printf("Looking for dir %s\n", tokens[i]);
+        //printf("Looking for dir %s\n", tokens[i]);
         int nextinode = find_in_directory(dir, tokens[i]);
         dir = find_by_inode(nextinode);
         if (!dir){
@@ -441,7 +441,7 @@ static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_
     }
     for (int bufiter = 0; bufiter < dir->inode.size; bufiter += sizeof(struct wfs_dentry)){
         struct wfs_dentry* curr_item = (struct wfs_dentry*)((char*) dir->data + bufiter);
-        printf("%s\n", curr_item->name);
+        //printf("%s\n", curr_item->name);
         filler(buf, curr_item->name, NULL, offset);
     }
     
@@ -473,11 +473,11 @@ static int wfs_unlink(const char* path){ // rm
 
     if (count > 0) { // Find the parent of the file to remove
         for (int i = 0; i < count - 1; i++) {
-            printf("Looking for dir %s\n", tokens[i]);
+            //printf("Looking for dir %s\n", tokens[i]);
             int nextinode = find_in_directory(parent, tokens[i]);
             parent = find_by_inode(nextinode);
             if (!parent){
-                // printf("%s Path Not Found\n", tokens[i]);
+                //printf("%s Path Not Found\n", tokens[i]);
                 free(temppath);
                 return -ENOENT;
             }

@@ -7,6 +7,9 @@
 #define MAX_FILE_NAME_LEN 32
 #define WFS_MAGIC 0xdeadbeef
 
+#define CAP 1000000
+#define PATH_LEN 128
+
 struct wfs_sb {
     uint32_t magic;
     uint32_t head; //more like an offset
